@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>html5-qrcode 精度検証</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f3f4f6;
+      color: #111827;
+    }
+    main { max-width: 760px; margin: auto; padding: 16px; }
+    h1 { font-size: 22px; margin: 8px 0 4px; }
+    .sub { color: #6b7280; font-size: 13px; margin-bottom: 16px; }
+    .card {
+      background: white; border-radius: 12px; padding: 16px;
+      margin-bottom: 12px; box-shadow: 0 1px 4px #0001;
+    }
+    label { display:block; font-size:13px; font-weight:600; margin: 10px 0 5px; }
+    input, select, button {
+      width: 100%; min-height: 44px; border: 1px solid #d1d5db;
+      border-radius: 8px; padding: 9px 11px; font-size: 16px;
+      background: white;
+    }
+    button { background:#111827; color:white; border:0; font-weight:700; cursor:pointer; }
+    button.secondary { background:#e5e7eb; color:#111827; }
+    button.danger { background:#b91c1c; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    #reader { width:100%; overflow:hidden; border-radius:10px; }
+    .status {
+      padding:10px; border-radius:8px; background:#f3f4f6;
+      font-size:14px; white-space:pre-wrap;
+    }
+    .result {
+      font-size:22px; font-weight:800; word-break:break-all;
+      padding:12px; border-radius:8px; background:#ecfdf5;
+      color:#065f46; min-height:52px;
+    }
+    .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+    .stat { background:#f9fafb; border-radius:8px; padding:10px; text-align:center; }
+    .stat b { display:block; font-size:24px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { border-bottom:1px solid #e5e7eb; padding:7px; text-align:left; }
+    .ok { color:#047857; font-weight:700; }
+    .ng { color:#b91c1c; font-weight:700; }
+    .small { color:#6b7280; font-size:12px; line-height:1.5; }
+    @media(max-width:520px) {
+      .grid { grid-template-columns:1fr; }
+      .stats { grid-template-columns:repeat(3,1fr); }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>html5-qrcode 精度検証</h1>
+  <div class="sub">GitHub Pages / HTTPS / カメラによるバーコード・QRコード検証</div>
+
+  <section class="card">
+    <label for="format">検証するコード</label>
+    <select id="format">
+      <option value="CODE_128" selected>Code 128</option>
+      <option value="QR_CODE">QR Code</option>
+    </select>
+
+    <label for="expected">期待値（任意）</label>
+    <input id="expected" placeholder="例：U5G2026090801">
+
+    <label for="camera">カメラ</label>
+    <select id="camera"></select>
+
+    <div class="grid" style="margin-top:10px">
+      <button id="start">カメラ開始</button>
+      <button id="stop" class="secondary" disabled>停止</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div id="reader"></div>
+    <div class="status" id="status">カメラ開始前です。</div>
+  </section>
+
+  <section class="card">
+    <div class="small">直近の読み取り結果</div>
+    <div class="result" id="result">---</div>
+    <div class="stats" style="margin-top:10px">
+      <div class="stat"><span>成功</span><b id="successCount">0</b></div>
+      <div class="stat"><span>不一致</span><b id="mismatchCount">0</b></div>
+      <div class="stat"><span>総試行</span><b id="trialCount">0</b></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="grid">
+      <button id="markFail" class="danger">読み取れなかった（失敗）</button>
+      <button id="clear" class="secondary">履歴クリア</button>
+    </div>
+    <p class="small">
+      「成功」はライブラリがコードをデコードした回数です。同じコードの連続コールバックは重複計上しません。
+      読み取れなかった場合は「失敗」を1回押してください。
+      実際の精度比較では、同じ条件で10～30回程度繰り返すと比較しやすくなります。
+    </p>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:17px">検証履歴</h2>
+    <div style="overflow:auto">
+      <table>
+        <thead><tr><th>#</th><th>結果</th><th>読み取り値</th><th>時刻</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card small">
+    <b>注意</b><br>
+    カメラ映像と読み取り結果はこのページ内だけで処理します。
+    この検証ページから外部サーバーへ読み取り値を送信する処理はありません。
+    GitHub Pages のサイトはHTTPSで配信できるため、スマートフォンのカメラ利用テストに向いています。
+  </section>
+</main>
+
+<script>
+(() => {
+  const formatEl = document.getElementById("format");
+  const expectedEl = document.getElementById("expected");
+  const cameraEl = document.getElementById("camera");
+  const startBtn = document.getElementById("start");
+  const stopBtn = document.getElementById("stop");
+  const markFailBtn = document.getElementById("markFail");
+  const clearBtn = document.getElementById("clear");
+  const statusEl = document.getElementById("status");
+  const resultEl = document.getElementById("result");
+  const successCountEl = document.getElementById("successCount");
+  const mismatchCountEl = document.getElementById("mismatchCount");
+  const trialCountEl = document.getElementById("trialCount");
+  const historyEl = document.getElementById("history");
+
+  let scanner = null;
+  let running = false;
+  let lastDecoded = "";
+  let lastDecodedAt = 0;
+  let successCount = 0;
+  let mismatchCount = 0;
+  let trialCount = 0;
+  let history = [];
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function renderStats() {
+    successCountEl.textContent = successCount;
+    mismatchCountEl.textContent = mismatchCount;
+    trialCountEl.textContent = trialCount;
+  }
+
+  function renderHistory() {
+    historyEl.innerHTML = history.slice().reverse().map((x, i) => `
+      <tr>
+        <td>${history.length - i}</td>
+        <td class="${x.ok ? "ok" : "ng"}">${x.type}</td>
+        <td>${escapeHtml(x.value || "-")}</td>
+        <td>${x.time}</td>
+      </tr>
+    `).join("");
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+    }[c]));
+  }
+
+  function addHistory(type, value, ok) {
+    history.push({
+      type, value, ok,
+      time: new Date().toLocaleTimeString("ja-JP", {hour12:false})
+    });
+    renderHistory();
+  }
+
+  function getFormats() {
+    if (formatEl.value === "QR_CODE") {
+      return [Html5QrcodeSupportedFormats.QR_CODE];
+    }
+    return [Html5QrcodeSupportedFormats.CODE_128];
+  }
+
+  async function loadCameras() {
+    try {
+      const cameras = await Html5Qrcode.getCameras();
+      cameraEl.innerHTML = "";
+      cameras.forEach((camera, i) => {
+        const opt = document.createElement("option");
+        opt.value = camera.id;
+        opt.textContent = camera.label || `カメラ ${i + 1}`;
+        cameraEl.appendChild(opt);
+      });
+
+      // 背面カメラらしい名称を優先
+      const rear = cameras.find(c => /back|rear|environment|背面|後/i.test(c.label || ""));
+      if (rear) cameraEl.value = rear.id;
+
+      setStatus(`カメラ ${cameras.length} 台を検出しました。`);
+    } catch (e) {
+      setStatus("カメラ一覧を取得できませんでした。\nHTTPSとカメラ権限を確認してください。\n" + e);
+    }
+  }
+
+  async function startScanner() {
+    if (running) return;
+
+    scanner = new Html5Qrcode("reader", {
+      formatsToSupport: getFormats()
+    });
+
+    const config = {
+      fps: 10,
+      qrbox: function(viewfinderWidth, viewfinderHeight) {
+        const size = Math.min(viewfinderWidth * 0.85, viewfinderHeight * 0.45, 420);
+        return { width: Math.round(size), height: Math.round(size * 0.45) };
+      },
+      aspectRatio: 1.777778
+    };
+
+    const cameraId = cameraEl.value;
+    if (!cameraId) {
+      setStatus("カメラが選択されていません。");
+      return;
+    }
+
+    try {
+      await scanner.start(
+        cameraId,
+        config,
+        onScanSuccess,
+        () => {}
+      );
+      running = true;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      setStatus("スキャン中です。バーコードをカメラに合わせてください。");
+    } catch (e) {
+      scanner = null;
+      setStatus("カメラ開始に失敗しました。\n" + e);
+    }
+  }
+
+  async function stopScanner() {
+    if (!scanner || !running) return;
+    try {
+      await scanner.stop();
+      await scanner.clear();
+    } catch (e) {
+      console.warn(e);
+    }
+    running = false;
+    scanner = null;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    setStatus("停止しました。");
+  }
+
+  function onScanSuccess(decodedText, decodedResult) {
+    const now = Date.now();
+
+    // 同一コードの連続コールバックを1回として扱う
+    if (decodedText === lastDecoded && now - lastDecodedAt < 1500) return;
+
+    lastDecoded = decodedText;
+    lastDecodedAt = now;
+
+    const expected = expectedEl.value.trim();
+    const ok = !expected || decodedText === expected;
+
+    trialCount++;
+    if (ok) successCount++;
+    else mismatchCount++;
+
+    resultEl.textContent = decodedText;
+    resultEl.style.background = ok ? "#ecfdf5" : "#fef2f2";
+    resultEl.style.color = ok ? "#065f46" : "#991b1b";
+
+    addHistory(ok ? "成功" : "不一致", decodedText, ok);
+    renderStats();
+
+    setStatus(
+      ok
+        ? `読み取り成功\n${decodedText}`
+        : `読み取りましたが期待値と不一致です。\n期待値: ${expected}\n実際: ${decodedText}`
+    );
+  }
+
+  markFailBtn.addEventListener("click", () => {
+    trialCount++;
+    addHistory("失敗", "", false);
+    renderStats();
+    setStatus("読み取り失敗を1回記録しました。");
+  });
+
+  clearBtn.addEventListener("click", () => {
+    successCount = 0;
+    mismatchCount = 0;
+    trialCount = 0;
+    history = [];
+    lastDecoded = "";
+    resultEl.textContent = "---";
+    resultEl.style.background = "#ecfdf5";
+    resultEl.style.color = "#065f46";
+    renderStats();
+    renderHistory();
+    setStatus("履歴をクリアしました。");
+  });
+
+  startBtn.addEventListener("click", startScanner);
+  stopBtn.addEventListener("click", stopScanner);
+  formatEl.addEventListener("change", async () => {
+    if (running) await stopScanner();
+    setStatus("コード種別を変更しました。カメラを開始してください。");
+  });
+
+  loadCameras();
+  renderStats();
+  renderHistory();
+})();
+</script>
+</body>
+</html>
